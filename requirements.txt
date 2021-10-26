@@ -1,0 +1,6 @@
+Django~=3.2.8
+DeepImageSearch~=1.4
+pandas~=1.3.4
+djangorestframework~=3.12.4
+annoy~=1.17.0
+Pillow~=8.4.0
