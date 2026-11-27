@@ -101,3 +101,19 @@ flowchart LR
 7. **零停機模型升級：** 版本化 `ProductEmbedding(product_image_id, model_version, embedding)` 表支援背景回填新模型、Shadow/A-B 驗證後原子切流。
 8. **高併發防超賣與冪等性：** 原子 SQL 扣庫存（`WHERE stock >= qty`）＋ 結帳 API 強制 `Idempotency-Key`。
 9. **隱私與手機生命週期：** 查詢畫面僅於記憶體處理並清除 EXIF（預設不落盤）；監聽 `visibilitychange` 於退背景時立即停止相機軌道與暫停串流。
+
+---
+
+## 6. DDIA（《設計資料密集型應用》）核心原則落地對照
+
+推論吞吐層對標 **LLM Inference Infra** 方法論；資料一致性、Schema 演進與容錯層則直接將 Martin Kleppmann *DDIA* 的核心原語寫進程式碼與測試：
+
+| DDIA 章節與概念 | 本專案具體實作方式 | 對應部件 |
+| :--- | :--- | :---: |
+| **Ch. 1 — 尾延遲（P99）與尾延遲放大效應** | Grafana 監控 P50/P95/P99 直方圖（不只看平均值）；以 `max_wait_ms` 封頂合批等待；跨服務傳遞端到端 `X-Request-Deadline-Ms` 超時預算，逾時直接放棄避免放大尾延遲。 | Part 0, 1, 6 |
+| **Ch. 4 — Schema 演進（向前／向後相容）** | `packages/contracts/` 的 Pydantic 訊息外層帶 `schema_version: int = 1` 且消費端設定 `extra="ignore"` 支援滾動升級；`ProductEmbedding(model_version, embedding)` 將向量空間視為可演進 Schema，實現零停機換模型。 | Part 0, 2, 3 |
+| **Ch. 7 — 更新遺失（Lost Update）與原子寫入** | 防超賣採單條原子 SQL（`UPDATE sku SET stock = stock - :qty WHERE id = :id AND stock >= :qty`）＋ 強制 `Idempotency-Key`，避免 ORM `read→check→write` 競態；背景補償掃描採 `SELECT ... FOR UPDATE SKIP LOCKED` 無衝突領取任務。 | Part 4, 5 |
+| **Ch. 8 — 不可信時鐘與圍欄令牌（Fencing Token）** | 不單靠 Lease 或手機系統時間：建索引 Worker 搶佔租約時遞增單調 `attempt_token`，寫回向量時以 `WHERE attempt_token = :tok AND image_hash = :h` 擋下 GC 卡頓復活的殭屍寫入；即時串流以每個 `track_id` 的單調邏輯序號 `seq_id` 排序。 | Part 3, 5 |
+| **Ch. 11 — 三種背壓策略與杜絕裸雙寫** | 精準分流三種過載策略：**Drop 丟棄**（相機串流 Size-1 Latest-Frame-Wins）、**Buffer 緩衝**（批量建索引 Redis Streams）、**Backpressure 反向限速**（Server 下發 `throttle` 調控手機頻率）；透過同庫 `pgvector` ＋ DB 狀態機／Outbox 杜絕裸雙寫漂移。 | Part 2, 3, 5 |
+| **Ch. 12 — 原始事實（System of Record）vs 衍生資料（Derived Data）** | PostgreSQL（`Product`、`ProductImage` 的 S3 Key 與 `image_hash`）為唯一事實來源；向量索引與 Redis 快取皆為可重播（Replayable）的衍生資料，換模型或重建索引隨時可冪等重算。 | Part 2, 5 |
+

@@ -76,6 +76,11 @@ S3_REGION=auto
 - Adds NVIDIA GPU device reservation (`driver: nvidia`, `count: 1`, `capabilities: [gpu]`) and `VISION_DEVICE=cuda` to the `vision` service.
 - Usage: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build` (optionally add `--profile tunnel`).
 
+### Shared Contracts & DDIA Foundations (`packages/contracts/`)
+Lightweight conventions baked in from Day 1 so Parts 1–5 need zero breaking contract refactors:
+- **Schema Evolution (DDIA Ch. 4):** Base Pydantic envelope (`VersionedEnvelope`) includes `schema_version: int = 1` and `model_config = ConfigDict(extra="ignore")` for forward/backward compatibility during rolling upgrades.
+- **Cross-Service Header Constants (DDIA Ch. 1 & Ch. 7):** Define shared constants for `X-Request-ID` (tracing), `X-Request-Deadline-Ms` (end-to-end deadline propagation), and `Idempotency-Key` (safe checkout retries); ensure Caddy forwards these headers unchanged.
+
 ---
 
 ## 4. Acceptance Criteria

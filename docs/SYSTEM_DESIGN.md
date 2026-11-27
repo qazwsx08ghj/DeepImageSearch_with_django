@@ -103,3 +103,19 @@ flowchart LR
 7. **Zero-Downtime Model Upgrades:** Versioned `ProductEmbedding(product_image_id, model_version, embedding)` table allows background backfill of a new model, A/B verification, and atomic config flag cutover.
 8. **Flash-Sale Overselling & Idempotency:** Atomic SQL stock guard (`UPDATE ... SET stock = stock - qty WHERE stock >= qty`) + mandatory `Idempotency-Key` on checkout endpoints.
 9. **Privacy & Mobile Lifecycle:** Query camera frames are processed in memory (EXIF stripped, not persisted by default); mobile `visibilitychange` immediately stops camera tracks and pauses WebSocket streams when backgrounded.
+
+---
+
+## 6. DDIA (*Designing Data-Intensive Applications*) Principles Applied in Code
+
+While inference throughput follows **LLM Inference Infra** methodology, data consistency, schema evolution, and fault tolerance directly implement core primitives from Martin Kleppmann's *DDIA*:
+
+| DDIA Chapter & Concept | Concrete Implementation in This Project | Target Parts |
+| :--- | :--- | :---: |
+| **Ch. 1 — Tail Latency (P99) & Tail Latency Amplification** | Track P50/P95/P99 histograms (never averages); bound micro-batch wait (`max_wait_ms`); propagate end-to-end deadlines (`X-Request-Deadline-Ms`) across Gateway → Vision → DB so slow upstream hops drop expired work instead of amplifying tail latency. | Part 0, 1, 6 |
+| **Ch. 4 — Schema Evolution (Forward/Backward Compatibility)** | Versioned Pydantic envelopes in `packages/contracts/` (`schema_version: int = 1`, `extra="ignore"` on consumers) for safe rolling upgrades; versioned `ProductEmbedding(model_version, embedding)` treats vector spaces as evolvable schemas for zero-downtime model upgrades. | Part 0, 2, 3 |
+| **Ch. 7 — Lost Updates & Atomic Writes** | Prevent flash-sale overselling via single-statement atomic SQL (`UPDATE sku SET stock = stock - :qty WHERE id = :id AND stock >= :qty`) + `Idempotency-Key` rather than racy ORM read-modify-write; use `SELECT ... FOR UPDATE SKIP LOCKED` for contention-free worker chunk claiming. | Part 4, 5 |
+| **Ch. 8 — Unreliable Clocks & Fencing Tokens** | Never trust leases or client wall-clocks alone: incrementing monotonic `attempt_token` (fencing token) + immutable `image_hash` guard (`WHERE attempt_token = :tok AND image_hash = :h`) blocks paused/zombie indexing workers from overwriting newer vectors; monotonic logical `seq_id` per `track_id` orders live WebSocket responses. | Part 3, 5 |
+| **Ch. 11 — Three Backpressure Strategies & Avoiding Naked Dual-Writes** | Apply each DDIA overload strategy to its matching workload: **Drop** (Size-1 Latest-Frame-Wins on live camera stream), **Buffer** (Redis Streams on bulk indexing), and **Backpressure** (closed-loop server `throttle` hints to phones). Eliminate naked dual-writes via co-located `pgvector` + DB Outbox/State Machine reconciliation. | Part 2, 3, 5 |
+| **Ch. 12 — System of Record vs. Derived Data** | PostgreSQL (`Product`, `ProductImage` S3 key + `image_hash`) is the sole **System of Record**. Vector embeddings and Redis caches are replayable **Derived Data**—rebuildable idempotently at any time for new vision backbones or quantization formats. | Part 2, 5 |
+
